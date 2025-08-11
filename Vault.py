@@ -5,11 +5,10 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
-from easygui import buttonbox, fileopenbox, msgbox, choicebox
+from easygui import buttonbox, fileopenbox, msgbox, enterbox, fileopenbox, diropenbox
 import hashlib
 import json
 from cryptography.hazmat.backends import default_backend
-
 
 VAULT_META_DIR = ".Vault_files"
 if not os.path.exists(VAULT_META_DIR):
@@ -71,7 +70,7 @@ def password_flow():
 	if not os.path.exists(PASSWORD_FILE):
 		from easygui import passwordbox
 		while True:
-			pwd1 = passwordbox("Set a password for your vault:")
+			pwd1 = enterbox("Set a password for your vault:")
 			if not pwd1:
 				return False
 			pwd2 = passwordbox("Confirm password:")
@@ -167,7 +166,7 @@ def decrypt_file_with_rsa(encrypted_file, output_file, private_key_path, encrypt
 			f_out.write(decryptor.finalize())
 
 def open_vault():
-	files_dir = "files"
+	files_dir = ".files"
 	if not os.path.exists(files_dir):
 		os.makedirs(files_dir)
 	while True:
@@ -182,8 +181,7 @@ def open_vault():
 		if action == "Store":
 			store_file()
 		elif action == "Take Out":
-			from easygui import fileopenbox
-			file_choice_path = fileopenbox("Select encrypted file to take out:", default="files/encrypted_*")
+			file_choice_path = fileopenbox("Select encrypted file to take out:", default=".files/encrypted_*")
 			if not file_choice_path:
 				msgbox("No file selected.")
 				continue
@@ -208,7 +206,7 @@ def store_file():
 	if not input_file:
 		return
 	base_name = os.path.basename(input_file)
-	files_dir = "files"
+	files_dir = ".files"
 	output_file = os.path.join(files_dir, f"encrypted_{base_name}")
 	encrypted_key_file = os.path.join(files_dir, f"AES_{base_name}.key")
 	public_key = PUBLIC_KEY_FILE
@@ -219,7 +217,7 @@ def store_file():
 		msgbox(f"Storing failed: {e}")
 
 def take_out_file(file_name):
-	files_dir = "files"
+	files_dir = ".files"
 	encrypted_file = os.path.join(files_dir, f"encrypted_{file_name}")
 	encrypted_key_file = os.path.join(files_dir, f"AES_{file_name}.key")
 	if not os.path.exists(encrypted_file) or not os.path.exists(encrypted_key_file):
