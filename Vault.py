@@ -1,10 +1,107 @@
+import os
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import keywrap
 from cryptography.hazmat.backends import default_backend
-import os
+from easygui import buttonbox, fileopenbox, msgbox, choicebox
+import hashlib
+import json
+from cryptography.hazmat.backends import default_backend
+
+
+VAULT_META_DIR = ".Vault_files"
+if not os.path.exists(VAULT_META_DIR):
+	os.makedirs(VAULT_META_DIR)
+PUBLIC_KEY_FILE = os.path.join(VAULT_META_DIR, "vault_public_key.pem")
+PASSWORD_FILE = os.path.join(VAULT_META_DIR, "vault_password.json")
+PRIVATE_KEY_EXPORT = "key.pem"
+
+# Migrate legacy password file if it exists
+legacy_password_file = ".vault_password.json"
+if os.path.exists(legacy_password_file):
+	import shutil
+	shutil.move(legacy_password_file, PASSWORD_FILE)
+
+def hash_password(password):
+	return hashlib.sha256(password.encode()).hexdigest()
+
+def save_password(password):
+	with open(PASSWORD_FILE, "w") as f:
+		json.dump({"hash": hash_password(password)}, f)
+
+def check_password(password):
+	if not os.path.exists(PASSWORD_FILE):
+		return False
+	with open(PASSWORD_FILE, "r") as f:
+		data = json.load(f)
+	return hash_password(password) == data.get("hash")
+
+def password_flow():
+	# Generate RSA keys on first start
+	if not os.path.exists(PUBLIC_KEY_FILE):
+		intensity_choice = buttonbox(
+			"Choose encryption intensity (RSA key size):",
+			"Encryption Intensity",
+			choices=["2048 (Standard)", "3072 (High)", "4096 (Maximum)"]
+		)
+		if intensity_choice == "4096 (Maximum)":
+			key_size = 4096
+		elif intensity_choice == "3072 (High)":
+			key_size = 3072
+		else:
+			key_size = 2048
+		private_key = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
+		public_key = private_key.public_key()
+		# Save public key (hidden)
+		with open(PUBLIC_KEY_FILE, "wb") as f:
+			f.write(public_key.public_bytes(
+				encoding=serialization.Encoding.PEM,
+				format=serialization.PublicFormat.SubjectPublicKeyInfo
+			))
+		# Export private key for user
+		with open(PRIVATE_KEY_EXPORT, "wb") as f:
+			f.write(private_key.private_bytes(
+				encoding=serialization.Encoding.PEM,
+				format=serialization.PrivateFormat.PKCS8,
+				encryption_algorithm=serialization.NoEncryption()
+			))
+		msgbox(f"Your private key has been saved as '{PRIVATE_KEY_EXPORT}'. Please keep it safe!")
+	if not os.path.exists(PASSWORD_FILE):
+		from easygui import passwordbox
+		while True:
+			pwd1 = passwordbox("Set a password for your vault:")
+			if not pwd1:
+				return False
+			pwd2 = passwordbox("Confirm password:")
+			if pwd1 == pwd2:
+				save_password(pwd1)
+				msgbox("Password set! Please remember it.")
+				return True
+			else:
+				msgbox("Passwords do not match. Try again.")
+	else:
+		from easygui import passwordbox
+		attempts = 0
+		while attempts < 3:
+			pwd = passwordbox("Enter your vault password:")
+			if pwd and check_password(pwd):
+				return True
+			else:
+				msgbox("Incorrect password.")
+				attempts += 1
+		# After 3 failed attempts, offer reset
+		reset = buttonbox(
+			"Incorrect password entered 3 times.\nWould you like to reset your vault? This will delete ALL vault settings and keys.",
+			"Reset Vault",
+			choices=["Reset Vault", "Exit"]
+		)
+		if reset == "Reset Vault":
+			import shutil
+			shutil.rmtree(VAULT_META_DIR)
+			msgbox("Vault reset. Please restart the program to set a new password and keys.")
+		return False
 
 def encrypt_file_with_rsa(input_file, output_file, public_key_path, encrypted_key_file):
 	# Load RSA public key
@@ -69,119 +166,95 @@ def decrypt_file_with_rsa(encrypted_file, output_file, private_key_path, encrypt
 				f_out.write(decryptor.update(chunk))
 			f_out.write(decryptor.finalize())
 
-from easygui import buttonbox, fileopenbox, msgbox
-
-def main_menu():
+def open_vault():
+	files_dir = "files"
+	if not os.path.exists(files_dir):
+		os.makedirs(files_dir)
 	while True:
-		choice = buttonbox(
-			"Welcome to Vault!\nChoose an action:",
-			"Vault",
-			choices=["Encrypt File", "Decrypt File", "View Encrypted Files", "Help/About", "Exit"]
+		files = os.listdir(files_dir)
+		enc_files = [f for f in files if f.startswith("encrypted_")]
+		choices = [os.path.basename(f)[len("encrypted_"): ] for f in enc_files]
+		action = buttonbox(
+			"Vault Contents:", "Vault",
+			choices=["Store", "Take Out", "Reset Password", "Exit"],
+			default_choice="Store"
 		)
-		if choice == "Encrypt File":
-			encrypt_gui()
-		elif choice == "Decrypt File":
-			decrypt_gui()
-		elif choice == "View Encrypted Files":
-			view_encrypted_files()
-		elif choice == "Help/About":
-			show_help()
+		if action == "Store":
+			store_file()
+		elif action == "Take Out":
+			from easygui import fileopenbox
+			file_choice_path = fileopenbox("Select encrypted file to take out:", default="files/encrypted_*")
+			if not file_choice_path:
+				msgbox("No file selected.")
+				continue
+			file_choice = os.path.basename(file_choice_path)[len("encrypted_"): ] if os.path.basename(file_choice_path).startswith("encrypted_") else os.path.basename(file_choice_path)
+			take_out_file(file_choice)
+		elif action == "Reset Password":
+			confirm = buttonbox(
+				"Do you want to reset your vault password? This will NOT delete your vault files or keys.",
+				"Reset Password",
+				choices=["Yes", "No"]
+			)
+			if confirm == "Yes":
+				if os.path.exists(PASSWORD_FILE):
+					os.remove(PASSWORD_FILE)
+				msgbox("Password reset. Please restart the program to set a new password.")
+				break
 		else:
 			break
-def view_encrypted_files():
-	files_dir = "files"
-	if not os.path.exists(files_dir):
-		msgbox("No 'files' folder found.")
-		return
-	files = os.listdir(files_dir)
-	enc_files = [f for f in files if f.startswith("encrypted_")]
-	key_files = [f for f in files if f.endswith(".key")]
-	if not enc_files:
-		msgbox("No encrypted files found.")
-		return
-	msg = "Encrypted files and their AES keys:\n\n"
-	for ef in enc_files:
-		key_name = f"AES_{ef[len('encrypted_'):]}.key"
-		msg += f"{ef}\n  Key: {key_name if key_name in key_files else 'Not found'}\n"
-	msgbox(msg)
 
-def show_help():
-	msg = (
-		"Vault - Digital File Encryption Tool\n\n"
-		"Features:\n"
-		"- Encrypt files using RSA and AES hybrid encryption.\n"
-		"- Decrypt files (AES key auto-selected).\n"
-		"- View all encrypted files and their AES keys.\n"
-		"- Files are stored in the 'files' folder.\n"
-		"- Encrypted files and keys are deleted after successful decryption.\n\n"
-		"For best security, keep your RSA keys safe."
-	)
-	msgbox(msg, "Help/About")
-
-def encrypt_gui():
-	input_file = fileopenbox("Select file to encrypt:", default="*.*")
+def store_file():
+	input_file = fileopenbox("Select file to store in vault:")
 	if not input_file:
 		return
-	default_pubkey = "public_key.pem"
-	if os.path.exists(default_pubkey):
-		public_key = default_pubkey
-	else:
-		public_key = fileopenbox("Select RSA public key (.pem):", default="*.pem")
-		if not public_key:
-			return
 	base_name = os.path.basename(input_file)
 	files_dir = "files"
-	if not os.path.exists(files_dir):
-		os.makedirs(files_dir)
 	output_file = os.path.join(files_dir, f"encrypted_{base_name}")
 	encrypted_key_file = os.path.join(files_dir, f"AES_{base_name}.key")
+	public_key = PUBLIC_KEY_FILE
 	try:
 		encrypt_file_with_rsa(input_file, output_file, public_key, encrypted_key_file)
-		msgbox(f"File encrypted successfully!\nEncrypted file: {output_file}\nEncrypted AES key: {encrypted_key_file}")
+		msgbox(f"File stored in vault!\nEncrypted file: {output_file}\nAES key: {encrypted_key_file}")
 	except Exception as e:
-		msgbox(f"Encryption failed: {e}")
+		msgbox(f"Storing failed: {e}")
 
-def decrypt_gui():
-	encrypted_file = fileopenbox("Select encrypted file:", default="files/encrypted_*")
-	if not encrypted_file:
-		return
-	private_key = fileopenbox("Select RSA private key (.pem):", default="*.pem")
-	if not private_key:
-		return
-	# Automatically select AES key file based on encrypted file name
-	base_name = os.path.basename(encrypted_file)
+def take_out_file(file_name):
 	files_dir = "files"
-	if not os.path.exists(files_dir):
-		os.makedirs(files_dir)
-	key_name = base_name[len("encrypted_"):] if base_name.startswith("encrypted_") else base_name
-	encrypted_key_file = os.path.join(files_dir, f"AES_{key_name}.key")
-	if not os.path.exists(encrypted_key_file):
-		msgbox(f"AES key file not found: {encrypted_key_file}")
+	encrypted_file = os.path.join(files_dir, f"encrypted_{file_name}")
+	encrypted_key_file = os.path.join(files_dir, f"AES_{file_name}.key")
+	if not os.path.exists(encrypted_file) or not os.path.exists(encrypted_key_file):
+		msgbox("Encrypted file or AES key not found.")
 		return
-	if base_name.startswith("encrypted_"):
-		output_file = os.path.join(files_dir, key_name)
-	else:
-		output_file = os.path.join(files_dir, f"decrypted_{base_name}")
-	# Confirm deletion before proceeding
-	confirm = buttonbox(
-		f"After decryption, the following files will be deleted:\n\n{encrypted_file}\n{encrypted_key_file}\n\nContinue?",
-		"Confirm Deletion",
-		choices=["Yes", "No"]
-	)
-	if confirm != "Yes":
-		msgbox("Decryption cancelled.")
+	private_key = fileopenbox("Select your private key (key.pem):", default="key.pem")
+	if not private_key:
+		msgbox("You must select a private key to take out the file.")
 		return
+	from easygui import diropenbox
+	dest_dir = diropenbox("Choose folder to save the decrypted file:")
+	if not dest_dir:
+		return
+	dest_file = os.path.join(dest_dir, file_name)
 	try:
-		decrypt_file_with_rsa(encrypted_file, output_file, private_key, encrypted_key_file)
-		# Delete encrypted files after successful decryption
-		if os.path.exists(encrypted_file):
-			os.remove(encrypted_file)
-		if os.path.exists(encrypted_key_file):
-			os.remove(encrypted_key_file)
-		msgbox(f"File decrypted successfully!\nDecrypted file: {output_file}\nEncrypted files deleted.")
+		decrypt_file_with_rsa(encrypted_file, dest_file, private_key, encrypted_key_file)
+		# Confirm deletion
+		confirm = buttonbox(
+			f"Delete encrypted file and AES key from vault?\n\n{encrypted_file}\n{encrypted_key_file}",
+			"Confirm Deletion",
+			choices=["Yes", "No"]
+		)
+		if confirm == "Yes":
+			if os.path.exists(encrypted_file):
+				os.remove(encrypted_file)
+			if os.path.exists(encrypted_key_file):
+				os.remove(encrypted_key_file)
+		msgbox(f"File taken out and saved to: {dest_file}")
 	except Exception as e:
-		msgbox(f"Decryption failed: {e}")
+		msgbox(f"Take out failed: {e}")
+
+def main():
+	if password_flow():
+		open_vault()
 
 if __name__ == "__main__":
-	main_menu()
+	main()
 
