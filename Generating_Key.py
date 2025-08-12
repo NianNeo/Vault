@@ -2,8 +2,7 @@ from easygui import enterbox
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-key_size = enterbox("Enter key size","Key size", "2048")
-key_size = int(key_size) if key_size.isdigit() else 2048
+key_size = int(enterbox("Enter key size","Key size", "2048"))
 
 # Generate keys
 private_key = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
